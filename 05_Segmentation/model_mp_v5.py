@@ -1,0 +1,118 @@
+import torch.nn as nn
+
+
+def CBR_block(in_planes, out_planes, upsample=False, kernel=3, stride=1, padding=1, output_padding=0):
+    """
+    Stacks convolution (or transpose convolution, if upsample=True),
+    batch normalization and ReLU into one sequential layer.
+    """
+
+    if upsample:
+        conv = nn.ConvTranspose2d(in_planes, out_planes, kernel_size=kernel, stride=stride,
+                                  padding=padding, output_padding=output_padding)
+    else:
+        conv = nn.Conv2d(in_planes, out_planes, kernel_size=kernel, stride=stride,
+                         padding=padding)
+
+    return nn.Sequential(conv,
+                         nn.BatchNorm2d(num_features=out_planes),
+                         nn.ReLU(True))
+
+
+class SegmenterModel(nn.Module):
+    def __init__(self, in_size=3):
+        super(SegmenterModel, self).__init__()
+        """
+        Simplified SegNet, based on VGG-11.
+        10 convolution layers in downsample (symmetrical to upsample)
+        5 max-pooling layers in downsample (symmetrical to upsample)
+        """
+
+        # Downsample
+        self.conv_1_0 = CBR_block(3, 64)
+        self.conv_1_1 = CBR_block(64, 64)
+        self.pool_1 = nn.MaxPool2d(2, return_indices=True)
+
+        self.conv_2_0 = CBR_block(64, 128)
+        self.conv_2_1 = CBR_block(128, 128)
+        self.pool_2 = nn.MaxPool2d(2, return_indices=True)
+
+        self.conv_3_0 = CBR_block(128, 256)
+        self.conv_3_1 = CBR_block(256, 256)
+        self.pool_3 = nn.MaxPool2d(2, return_indices=True)
+
+        self.conv_4_0 = CBR_block(256, 512)
+        self.conv_4_1 = CBR_block(512, 512)
+        self.pool_4 = nn.MaxPool2d(2, return_indices=True)
+
+        self.conv_5_0 = CBR_block(512, 512)
+        self.conv_5_1 = CBR_block(512, 512)
+        self.pool_5 = nn.MaxPool2d(2, return_indices=True)
+
+        # Upsample
+        self.unpool_5 = nn.MaxUnpool2d(2)
+        self.trconv_5_1 = CBR_block(512, 512)
+        self.trconv_5_0 = CBR_block(512, 512)
+
+        self.unpool_4 = nn.MaxUnpool2d(2)
+        self.trconv_4_1 = CBR_block(512, 512)
+        self.trconv_4_0 = CBR_block(512, 256)
+
+        self.unpool_3 = nn.MaxUnpool2d(2)
+        self.trconv_3_1 = CBR_block(256, 256)
+        self.trconv_3_0 = CBR_block(256, 128)
+
+        self.unpool_2 = nn.MaxUnpool2d(2)
+        self.trconv_2_1 = CBR_block(128, 128)
+        self.trconv_2_0 = CBR_block(128, 64)
+
+        self.unpool_1 = nn.MaxUnpool2d(2)
+        self.trconv_1_1 = CBR_block(64, 64)
+        self.trconv_1_0 = CBR_block(64, 2)
+
+        self.softmax = nn.Softmax(dim = 1)
+
+    def forward(self, x):
+        # Downsample
+        x = self.conv_1_0(x)
+        x = self.conv_1_1(x)
+        x, indices_1 = self.pool_1(x)
+
+        x = self.conv_2_0(x)
+        x = self.conv_2_1(x)
+        x, indices_2 = self.pool_2(x)
+
+        x = self.conv_3_0(x)
+        x = self.conv_3_1(x)
+        x, indices_3 = self.pool_3(x)
+
+        x = self.conv_4_0(x)
+        x = self.conv_4_1(x)
+        x, indices_4 = self.pool_4(x)
+
+        x = self.conv_5_0(x)
+        x = self.conv_5_1(x)
+        x, indices_5 = self.pool_5(x)
+
+        # Upsample
+        x = self.unpool_5(x, indices_5)
+        x = self.trconv_5_1(x)
+        x = self.trconv_5_0(x)
+
+        x = self.unpool_4(x, indices_4)
+        x = self.trconv_4_1(x)
+        x = self.trconv_4_0(x)
+
+        x = self.unpool_3(x, indices_3)
+        x = self.trconv_3_1(x)
+        x = self.trconv_3_0(x)
+
+        x = self.unpool_2(x, indices_2)
+        x = self.trconv_2_1(x)
+        x = self.trconv_2_0(x)
+
+        x = self.unpool_1(x, indices_1)
+        x = self.trconv_1_1(x)
+        x = self.trconv_1_0(x)
+
+        return self.softmax(x)
